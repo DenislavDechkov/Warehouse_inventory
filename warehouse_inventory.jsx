@@ -8,8 +8,41 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 const fmtDate = (d) => new Date(d).toLocaleString("bg-BG", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const fmtShortDate = (iso) => new Date(iso).toLocaleDateString("bg-BG", { day: "2-digit", month: "2-digit" });
 const fmt = (n) => Number(n || 0).toFixed(2);
-const sget = async (key) => { try { const r = await window.storage.get(key, true); return r?.value ? JSON.parse(r.value) : null; } catch { return null; } };
-const sset = async (key, val) => { try { await window.storage.set(key, JSON.stringify(val), true); } catch {} };
+
+let _supabase = null;
+const getSupabase = () => {
+  if (_supabase) return _supabase;
+  const config = JSON.parse(localStorage.getItem(K.settings) || "{}");
+  if (config.supabaseUrl && config.supabaseKey && window.supabase) {
+    _supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseKey);
+    return _supabase;
+  }
+  return null;
+};
+
+const sget = async (k) => {
+  try {
+    const sb = getSupabase();
+    if (sb) {
+      const { data, error } = await sb.from("app_data").select("value").eq("key", k).single();
+      if (!error && data) {
+        localStorage.setItem(k, JSON.stringify(data.value));
+        return data.value;
+      }
+    }
+    return JSON.parse(localStorage.getItem(k));
+  } catch { return null; }
+};
+
+const sset = async (k, v) => {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+    const sb = getSupabase();
+    if (sb) {
+      await sb.from("app_data").upsert({ key: k, value: v }, { onConflict: "key" });
+    }
+  } catch {}
+};
 
 // ─── Categories ───────────────────────────────────────────────────────────────
 const CATEGORIES = [
@@ -194,13 +227,46 @@ async function fetchPricesAI(products) {
 const F = "'Plus Jakarta Sans',sans-serif";
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-function Toast({ msg, type, onClose }) {
+function Toast({ msg, type, onClose, undoable, onUndo }) {
   const T = useT();
-  useEffect(() => { const t = setTimeout(onClose, 4500); return () => clearTimeout(t); }, [onClose]);
+  useEffect(() => { const t = setTimeout(onClose, undoable ? 7000 : 4500); return () => clearTimeout(t); }, [onClose, undoable]);
   const col = { success: T.green, error: T.red, info: T.primary }[type] || T.primary;
   return (
     <div style={{ position: "fixed", bottom: 24, right: 24, zIndex: 9999, background: T.surface, border: `2px solid ${col}`, color: T.text, padding: "12px 20px", borderRadius: 12, fontFamily: F, fontSize: 13, fontWeight: 600, boxShadow: `0 8px 24px ${col}33`, animation: "slideIn .25s ease", maxWidth: 320, display: "flex", alignItems: "center", gap: 10 }}>
-      <span style={{ fontSize: 16 }}>{type === "success" ? "✅" : type === "error" ? "❌" : "ℹ️"}</span>{msg}
+      <span style={{ fontSize: 16 }}>{type === "success" ? "✅" : type === "error" ? "❌" : "ℹ️"}</span>
+      <div style={{ flex: 1 }}>{msg}</div>
+      {undoable && <button onClick={onUndo} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 11, cursor: "pointer", fontWeight: 700, marginLeft: 8 }}>UNDO</button>}
+    </div>
+  );
+}
+
+// ─── Onboarding Modal ─────────────────────────────────────────────────────────
+function OnboardingModal({ onClose }) {
+  const T = useT();
+  const [step, setStep] = useState(0);
+  const steps = [
+    { t: "Добре дошли в Склад PRO! ⬡", d: "Вашата система за управление на склад вече е готова. Нека ви покажем основните функции.", i: "🚀" },
+    { t: "📦 Инвентар", d: "Тук следите количествата, цените и сроковете на годност. Използвайте Ctrl+F за бързо търсене.", i: "📦" },
+    { t: "🚚 Доставки", d: "Правете нови продажби или зареждания. Можете да ползвате шаблони и QR кодове.", i: "🚚" },
+    { t: "📊 Анализи", d: "Следете приходите, печалбите и ABC анализа в реално време.", i: "📊" },
+    { t: "⌨️ Бързи клавиши", d: "Alt + 1..5 за навигация, Ctrl+Z за Undo (отмяна).", i: "⌨️" }
+  ];
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(30,41,59,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 9999, backdropFilter: "blur(4px)" }}>
+      <div style={{ background: T.surface, borderRadius: 24, padding: 32, width: 380, textAlign: "center", boxShadow: T.shadowLg, border: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: 54, marginBottom: 20 }}>{steps[step].i}</div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: T.text, marginBottom: 12, fontFamily: F }}>{steps[step].t}</div>
+        <div style={{ fontSize: 14, color: T.textSub, marginBottom: 32, fontFamily: F, lineHeight: 1.5 }}>{steps[step].d}</div>
+        <div style={{ display: "flex", gap: 10 }}>
+          {step > 0 && <button onClick={() => setStep(s => s - 1)} style={{ flex: 1, padding: "12px 0", background: T.bg, color: T.textSub, border: `1px solid ${T.border}`, borderRadius: 12, cursor: "pointer", fontWeight: 700 }}>Назад</button>}
+          <button onClick={() => step < steps.length - 1 ? setStep(s => s + 1) : onClose()} style={{ flex: 2, padding: "12px 0", background: T.primary, color: "#fff", border: "none", borderRadius: 12, cursor: "pointer", fontWeight: 700 }}>
+            {step < steps.length - 1 ? "Напред" : "Започни работа"}
+          </button>
+        </div>
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginTop: 24 }}>
+          {steps.map((_, i) => <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: i === step ? T.primary : T.border }} />)}
+        </div>
+      </div>
     </div>
   );
 }
@@ -510,17 +576,18 @@ function ProductModal({ product, deliveries = [], onSave, onClose }) {
 function ManageWorkersModal({ onClose }) {
   const T = useT();
   const [users, setUsers] = useState([]);
-  const [form, setForm] = useState({ name: "", username: "", password: "", role: "worker" });
+  const [form, setForm] = useState({ name: "", username: "", password: "", role: "worker", pin: "" });
   const [error, setError] = useState("");
   useEffect(() => { sget(K.users).then(u => setUsers(u || [])); }, []);
   const inp = { background: T.bg, border: `1.5px solid ${T.border}`, color: T.text, padding: "9px 12px", borderRadius: 10, fontFamily: F, fontSize: 13, width: "100%", outline: "none" };
   const add = async () => {
     if (!form.name || !form.username || !form.password) { setError("Попълни всички полета"); return; }
+    if (form.pin && !/^\d{4}$/.test(form.pin)) { setError("PIN трябва да бъде точно 4 цифри"); return; }
     if (users.find(u => u.username === form.username)) { setError("Потр. име е заето"); return; }
     const hashed = await hashPwd(form.password);
     const updated = [...users, { ...form, password: hashed, passwordHashed: true, id: generateId(), createdAt: Date.now() }];
     await sset(K.users, updated); setUsers(updated);
-    setForm({ name: "", username: "", password: "", role: "worker" }); setError("");
+    setForm({ name: "", username: "", password: "", role: "worker", pin: "" }); setError("");
   };
   const remove = async (id) => {
     if (users.find(u => u.id === id)?.role === "owner") return;
@@ -553,6 +620,10 @@ function ManageWorkersModal({ onClose }) {
                   <option value="owner">👑 Собственик</option>
                 </select>
               </div>
+              <div>
+                <label style={{ fontSize: 11, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 4, fontFamily: F }}>PIN (ОПЦИЯ)</label>
+                <input style={inp} type="text" maxLength="4" value={form.pin} onChange={e => setForm(f => ({ ...f, pin: e.target.value.replace(/\D/g,"") }))} placeholder="1234" />
+              </div>
             </div>
             {error && <div style={{ color: T.red, fontSize: 12, marginBottom: 10, fontFamily: F, fontWeight: 600 }}>{error}</div>}
             <button onClick={add} className="btn-hover" style={{ width: "100%", padding: "10px 0", background: T.primary, color: "#fff", border: "none", borderRadius: 10, fontFamily: F, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>Добави работник</button>
@@ -562,7 +633,7 @@ function ManageWorkersModal({ onClose }) {
               <div style={{ width: 40, height: 40, borderRadius: 12, background: u.role === "owner" ? "#FEF3C7" : u.role === "manager" ? "#EDE9FE" : T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20 }}>{u.role === "owner" ? "👑" : u.role === "manager" ? "🔑" : "👤"}</div>
               <div style={{ flex: 1 }}>
                 <div style={{ fontSize: 14, fontWeight: 700, color: T.text, fontFamily: F }}>{u.name}</div>
-                <div style={{ fontSize: 12, color: T.textSub, fontFamily: F }}>@{u.username} · {roleLabel(u.role)}</div>
+                <div style={{ fontSize: 12, color: T.textSub, fontFamily: F }}>@{u.username} · {roleLabel(u.role)} {u.pin ? `· 🔢 ${u.pin}` : ""}</div>
               </div>
               {u.role !== "owner" && (
                 <button onClick={() => remove(u.id)} className="btn-hover" style={{ background: "#FEF2F2", border: "1px solid #FECACA", color: T.red, borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontFamily: F, fontSize: 12, fontWeight: 600 }}>Изтрий</button>
@@ -581,6 +652,8 @@ function LoginScreen({ onLogin, darkMode, setDarkMode }) {
   const [users, setUsers] = useState([]);
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [pin, setPin] = useState("");
+  const [loginMode, setLoginMode] = useState("pass"); 
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   useEffect(() => {
@@ -608,25 +681,56 @@ function LoginScreen({ onLogin, darkMode, setDarkMode }) {
     if (!user) { setError("Грешно потребителско име или парола"); return; }
     setError(""); onLogin(user);
   };
+  const handlePinLogin = (digit) => {
+    const newPin = (pin + digit).slice(0, 4);
+    setPin(newPin);
+    if (newPin.length === 4) {
+      const user = users.find(u => u.pin === newPin);
+      if (user) { setError(""); onLogin(user); }
+      else { setError("Невалиден PIN"); setPin(""); }
+    }
+  };
+
   const inp = { background: T.bg, border: `1.5px solid ${T.border}`, color: T.text, padding: "12px 16px", borderRadius: 12, fontFamily: F, fontSize: 15, width: "100%", outline: "none" };
   if (loading) return <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", color: T.primary, fontFamily: F, fontWeight: 700, fontSize: 18 }}>Зареждане...</div>;
   return (
     <div style={{ minHeight: "100vh", background: T.bg, display: "flex", alignItems: "center", justifyContent: "center", fontFamily: F, padding: 20 }}>
-      <div style={{ background: T.surface, borderRadius: 24, padding: 40, width: 360, boxShadow: T.shadowLg, border: `1px solid ${T.border}` }}>
+      <div style={{ background: T.surface, borderRadius: 24, padding: loginMode === "pin" ? "32px" : "40px", width: 360, boxShadow: T.shadowLg, border: `1px solid ${T.border}` }}>
         <div style={{ textAlign: "center", marginBottom: 32 }}>
           <div style={{ width: 64, height: 64, background: `linear-gradient(135deg,${T.primary},${T.primaryD})`, borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, margin: "0 auto 16px" }}>⬡</div>
           <div style={{ fontSize: 24, color: T.text, fontWeight: 800, letterSpacing: .5 }}>Склад PRO</div>
-          <div style={{ fontSize: 13, color: T.textSub, marginTop: 6, fontWeight: 500 }}>Влез в системата</div>
+          <button onClick={() => { setLoginMode(l => l === "pass" ? "pin" : "pass"); setError(""); setPin(""); }} style={{ background: "none", border: "none", color: T.primary, fontSize: 12, fontWeight: 700, cursor: "pointer", marginTop: 8 }}>{loginMode === "pass" ? "Вход с PIN" : "Вход с име и парола"}</button>
         </div>
-        {[{ label: "ПОТРЕБИТЕЛСКО ИМЕ", type: "text", val: username, set: setUsername, ph: "напр. owner" }, { label: "ПАРОЛА", type: "password", val: password, set: setPassword, ph: "••••••" }].map(({ label, type, val, set, ph }) => (
-          <div key={label} style={{ marginBottom: 16 }}>
-            <label style={{ fontSize: 12, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 6, letterSpacing: .3 }}>{label}</label>
-            <input style={inp} type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()}
-              onFocus={e => e.target.style.borderColor = T.primary} onBlur={e => e.target.style.borderColor = T.border} placeholder={ph} />
+
+        {loginMode === "pass" ? (
+          <>
+            {[{ label: "ПОТРЕБИТЕЛСКО ИМЕ", type: "text", val: username, set: setUsername, ph: "напр. owner" }, { label: "ПАРОЛА", type: "password", val: password, set: setPassword, ph: "••••••" }].map(({ label, type, val, set, ph }) => (
+              <div key={label} style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 12, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 6, letterSpacing: .3 }}>{label}</label>
+                <input style={inp} type={type} value={val} onChange={e => set(e.target.value)} onKeyDown={e => e.key === "Enter" && handleLogin()}
+                  onFocus={e => e.target.style.borderColor = T.primary} onBlur={e => e.target.style.borderColor = T.border} placeholder={ph} />
+              </div>
+            ))}
+            {error && <div style={{ color: T.red, fontSize: 13, marginBottom: 16, textAlign: "center", fontWeight: 600, background: "#FEF2F2", padding: "10px", borderRadius: 10, border: "1px solid #FECACA" }}>{error}</div>}
+            <button onClick={handleLogin} className="btn-hover" style={{ width: "100%", padding: "14px 0", marginTop: 8, background: `linear-gradient(135deg,${T.primary},${T.primaryD})`, color: "#fff", border: "none", borderRadius: 14, fontFamily: F, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: `0 4px 16px ${T.primary}44` }}>Влез →</button>
+          </>
+        ) : (
+          <div style={{ textAlign: "center" }}>
+            <div style={{ display: "flex", justifyContent: "center", gap: 12, marginBottom: 24 }}>
+              {[0, 1, 2, 3].map(i => (
+                <div key={i} style={{ width: 14, height: 14, borderRadius: "50%", background: pin.length > i ? T.primary : T.border }} />
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>
+              {[1, 2, 3, 4, 5, 6, 7, 8, 9, "C", 0, "×"].map(d => (
+                <button key={d} onClick={() => d === "C" ? setPin("") : d === "×" ? setPin(p => p.slice(0, -1)) : handlePinLogin(d)} className="btn-hover" style={{
+                  padding: "16px 0", background: T.bg, color: T.text, border: `1px solid ${T.border}`, borderRadius: 16, fontFamily: F, fontSize: 18, fontWeight: 700, cursor: "pointer"
+                }}>{d}</button>
+              ))}
+            </div>
+            {error && <div style={{ color: T.red, fontSize: 13, marginTop: 16, fontWeight: 600 }}>{error}</div>}
           </div>
-        ))}
-        {error && <div style={{ color: T.red, fontSize: 13, marginBottom: 16, textAlign: "center", fontWeight: 600, background: "#FEF2F2", padding: "10px", borderRadius: 10, border: "1px solid #FECACA" }}>{error}</div>}
-        <button onClick={handleLogin} className="btn-hover" style={{ width: "100%", padding: "14px 0", marginTop: 8, background: `linear-gradient(135deg,${T.primary},${T.primaryD})`, color: "#fff", border: "none", borderRadius: 14, fontFamily: F, fontSize: 15, fontWeight: 700, cursor: "pointer", boxShadow: `0 4px 16px ${T.primary}44` }}>Влез →</button>
+        )}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 16 }}>
           <div style={{ fontSize: 11, color: T.textMute }}>По подразбиране: <b style={{ color: T.textSub }}>owner</b> / <b style={{ color: T.textSub }}>owner123</b></div>
           <button onClick={() => { setDarkMode(d => !d); }} style={{ background: "none", border: "none", fontSize: 18, cursor: "pointer", padding: 4 }}>{darkMode ? "☀️" : "🌙"}</button>
@@ -983,14 +1087,27 @@ function SettingsModal({ settings, onSave, onClose }) {
         
         <div style={{ padding: 16, background: T.bg, borderRadius: 12, border: `1px solid ${T.border}`, marginBottom: 20 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: T.primary, marginBottom: 12, fontFamily: F }}>🤖 Telegram Аларми</div>
-          <div style={{ fontSize: 11, color: T.textSub, marginBottom: 16, fontFamily: F }}>Въведете Token на вашия Telegram бот и Chat ID, за да получавате известия при критично нисък запас на продукти.</div>
-          <div style={{ marginBottom: 12 }}>
-            <label style={{ fontSize: 11, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 5 }}>BOT TOKEN</label>
-            <input style={inp} value={form.telegramToken} onChange={e => setForm(f => ({...f, telegramToken: e.target.value}))} placeholder="напр. 123456:ABC-DEF..." />
+          <div style={{ fontSize: 11, color: T.textSub, marginBottom: 12, fontFamily: F }}>Известия при нисък запас.</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <div><label style={{ fontSize: 10, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 4 }}>TOKEN</label><input style={inp} value={form.telegramToken} onChange={e => setForm(f => ({...f, telegramToken: e.target.value}))} /></div>
+            <div><label style={{ fontSize: 10, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 4 }}>CHAT ID</label><input style={inp} value={form.telegramChat} onChange={e => setForm(f => ({...f, telegramChat: e.target.value}))} /></div>
           </div>
-          <div>
-            <label style={{ fontSize: 11, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 5 }}>CHAT ID</label>
-            <input style={inp} value={form.telegramChat} onChange={e => setForm(f => ({...f, telegramChat: e.target.value}))} placeholder="напр. -1001234567" />
+        </div>
+
+        <div style={{ padding: 16, background: "#EEF2FF", borderRadius: 12, border: `1px solid ${T.primary}33`, marginBottom: 20 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: T.primary, marginBottom: 12, fontFamily: F }}>☁️ Supabase Cloud Sync</div>
+          <div style={{ fontSize: 11, color: T.textSub, marginBottom: 12, fontFamily: F }}>Синхронизация в облака и на множество устройства.</div>
+          <div style={{ marginBottom: 10 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 4 }}>PROJECT URL</label>
+            <input style={inp} value={form.supabaseUrl} onChange={e => setForm(f => ({...f, supabaseUrl: e.target.value}))} />
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ fontSize: 10, fontWeight: 700, color: T.textSub, display: "block", marginBottom: 4 }}>ANON KEY</label>
+            <input style={inp} value={form.supabaseKey} onChange={e => setForm(f => ({...f, supabaseKey: e.target.value}))} />
+          </div>
+          <button onClick={() => { if(confirm("Всички данни от браузъра ще бъдат качени в Supabase. Продължаваме?")) window._migrate(); }} style={{ width: "100%", padding: "8px", background: T.primary, color: "#fff", border: "none", borderRadius: 8, fontSize: 11, fontWeight: 700, cursor: "pointer" }}>📤 Качи локалните данни в облака</button>
+          <div style={{ marginTop: 10, fontSize: 9, color: T.textMute, background: "#fff", padding: 8, borderRadius: 6, border: `1px solid ${T.border}` }}>
+            <b>SQL Setup:</b> CREATE TABLE app_data (key TEXT PRIMARY KEY, value JSONB);
           </div>
         </div>
         
@@ -1158,7 +1275,10 @@ function InventoryView({ products, allProducts, search, setSearch, isOwner, onAd
   return (
     <div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 20 }} className="grid-mobile-1">
-        {[{ mode: "low", label: "⚠ НИСЪК ЗАПАС", count: lowCount, col: T.orange, bg: "#FFFBEB" }, { mode: "empty", label: "✕ ИЗЧЕРПАНИ", count: emptyCount, col: T.red, bg: "#FEF2F2" }].map(({ mode, label, count, col, bg }) => (
+        {[
+          { mode: "low", label: "⚠ НИСЪК ЗАПАС", count: lowCount, col: T.orange, bg: "#FFFBEB" },
+          { mode: "empty", label: "✕ ИЗЧЕРПАНИ", count: emptyCount, col: T.red, bg: "#FEF2F2" }
+        ].map(({ mode, label, count, col, bg }) => (
           <button key={mode} className="card-hover btn-hover" onClick={() => onAlertMode(mode)} style={{ background: count > 0 ? bg : T.surface, border: `2px solid ${count > 0 ? col : T.border}`, borderRadius: 16, padding: "18px 20px", cursor: "pointer", textAlign: "left", boxShadow: T.shadow }}>
             <div style={{ fontSize: 11, fontWeight: 700, color: count > 0 ? col : T.textMute, letterSpacing: .5, marginBottom: 6 }}>{label}</div>
             <div style={{ fontSize: 32, fontWeight: 800, color: count > 0 ? col : T.textMute }}>{count}</div>
@@ -1173,11 +1293,12 @@ function InventoryView({ products, allProducts, search, setSearch, isOwner, onAd
         ))}
       </div>
       <div style={{ display: "flex", gap: 10, marginBottom: 20, flexWrap: "wrap" }}>
-        <div style={{ flex: 1, position: "relative", minWidth: 200 }}>
-          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", fontSize: 16, color: T.textMute }}>🔍</span>
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Търси по код или наименование..."
-            style={{ width: "100%", background: T.surface, border: `1.5px solid ${T.border}`, color: T.text, padding: "11px 14px 11px 42px", borderRadius: 12, fontFamily: F, fontSize: 14, outline: "none", boxShadow: T.shadow }}
-            onFocus={e => e.target.style.borderColor = T.primary} onBlur={e => e.target.style.borderColor = T.border} />
+        <div style={{ position: "relative", flex: 1, minWidth: isMobile ? "100%" : 280 }}>
+          <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: T.textMute, fontSize: 16 }}>🔍</span>
+          <input id="search-input" value={search} onChange={e => setSearch(e.target.value)} placeholder="Търси по име или баркод..." style={{
+            width: "100%", padding: "12px 16px 12px 42px", background: T.surface, border: `1.5px solid ${T.border}`, borderRadius: 14,
+            fontSize: 14, color: T.text, outline: "none", transition: "border-color .2s, box-shadow .2s", boxShadow: T.shadow,
+          }} onFocus={e => { e.target.style.borderColor = T.primary; e.target.style.boxShadow = `0 0 0 4px ${T.primary}22`; }} onBlur={e => { e.target.style.borderColor = T.border; e.target.style.boxShadow = T.shadow; }} />
         </div>
         <select style={selSt} value={sortBy} onChange={e => setSortBy(e.target.value)}>
           {SORT_OPTS.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
@@ -1498,12 +1619,13 @@ function HistoryView({ deliveries, onViewReceipt, currentUser }) {
   const isOwnerOrManager = currentUser.role === "owner" || currentUser.role === "manager";
   const [search, setSearch] = useState("");
   const [dateFilter, setDateFilter] = useState("all");
+  const [viewMode, setViewMode] = useState("list"); // list or calendar
   const [workerFilter, setWorkerFilter] = useState(isOwnerOrManager ? "all" : currentUser.id);
   const workers = useMemo(() => { const m = {}; deliveries.forEach(d => { if (!m[d.userId]) m[d.userId] = d.userName; }); return Object.entries(m); }, [deliveries]);
   const filtered = useMemo(() => {
+    const q = search.toLowerCase();
     const now = new Date();
     return deliveries.filter(d => {
-      const q = search.toLowerCase();
       const ms = !q || d.deliveryId?.toLowerCase().includes(q) || d.userName.toLowerCase().includes(q) || d.items.some(i => i.name.toLowerCase().includes(q));
       const mw = workerFilter === "all" || d.userId === workerFilter;
       const diff = (now - new Date(d.date)) / 86400000;
@@ -1546,8 +1668,13 @@ function HistoryView({ deliveries, onViewReceipt, currentUser }) {
           <option value={currentUser.id}>👤 Моите</option>
           {isOwnerOrManager && workers.filter(([id]) => id !== currentUser.id).map(([id, name]) => <option key={id} value={id}>{name}</option>)}
         </select>
+        <div style={{ background: T.surface, border: `1.5px solid ${T.border}`, borderRadius: 10, display: "flex", overflow: "hidden" }}>
+          <button onClick={() => setViewMode("list")} style={{ padding: "8px 12px", background: viewMode === "list" ? T.primary : "transparent", color: viewMode === "list" ? "#fff" : T.textSub, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>☰</button>
+          <button onClick={() => setViewMode("calendar")} style={{ padding: "8px 12px", background: viewMode === "calendar" ? T.primary : "transparent", color: viewMode === "calendar" ? "#fff" : T.textSub, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 700 }}>📅</button>
+        </div>
       </div>
-      <div style={{ background: T.surface, borderRadius: 16, border: `1px solid ${T.border}`, overflow: "auto", boxShadow: T.shadow }}>
+      {viewMode === "list" ? (
+        <div style={{ background: T.surface, borderRadius: 16, border: `1px solid ${T.border}`, overflow: "auto", boxShadow: T.shadow }}>
         <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
           <thead>
             <tr style={{ background: T.bg }}>
@@ -1579,6 +1706,79 @@ function HistoryView({ deliveries, onViewReceipt, currentUser }) {
           </tbody>
         </table>
       </div>
+      ) : (
+        <CalendarView deliveries={filtered} onPreview={onViewReceipt} />
+      )}
+    </div>
+  );
+}
+
+function CalendarView({ deliveries, onPreview }) {
+  const T = useT();
+  const [curr, setCurr] = useState(new Date());
+  const month = curr.getMonth(), year = curr.getFullYear();
+  const first = new Date(year, month, 1).getDay();
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const grid = [];
+  const startOffset = first === 0 ? 6 : first - 1; 
+  for (let i = 0; i < startOffset; i++) grid.push(null);
+  for (let i = 1; i <= daysInMonth; i++) grid.push(i);
+
+  const delivMap = {};
+  deliveries.forEach(d => {
+    const dt = new Date(d.date);
+    if (dt.getMonth() === month && dt.getFullYear() === year) {
+      const day = dt.getDate();
+      if (!delivMap[day]) delivMap[day] = [];
+      delivMap[day].push(d);
+    }
+  });
+
+  const [selectedDay, setSelectedDay] = useState(null);
+
+  return (
+    <div style={{ background: T.surface, borderRadius: 16, padding: "20px", border: `1px solid ${T.border}`, boxShadow: T.shadow }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+        <button onClick={() => setCurr(new Date(year, month - 1))} style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "6px 12px", borderRadius: 8, cursor: "pointer" }}>←</button>
+        <div style={{ fontWeight: 800, fontSize: 16, color: T.text }}>{new Date(year, month).toLocaleDateString("bg-BG", { month: "long", year: "numeric" }).toUpperCase()}</div>
+        <button onClick={() => setCurr(new Date(year, month + 1))} style={{ background: T.bg, border: `1px solid ${T.border}`, color: T.text, padding: "6px 12px", borderRadius: 8, cursor: "pointer" }}>→</button>
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+        {["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Нд"].map(d => <div key={d} style={{ textAlign: "center", fontSize: 11, fontWeight: 700, color: T.textMute, paddingBottom: 8 }}>{d}</div>)}
+        {grid.map((day, i) => {
+          const ds = day ? delivMap[day] || [] : [];
+          return (
+            <div key={i} onClick={() => day && setSelectedDay(day === selectedDay ? null : day)} style={{
+              height: 80, border: `1px solid ${day ? T.border : "transparent"}`, borderRadius: 12, padding: 6, cursor: day ? "pointer" : "default",
+              background: day === selectedDay ? `${T.primary}15` : T.surface, position: "relative"
+            }}>
+              {day && <div style={{ fontSize: 12, fontWeight: 700, color: T.textSub }}>{day}</div>}
+              {ds.length > 0 && (
+                <div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+                  <div style={{ fontSize: 10, background: T.primary, color: "#fff", padding: "2px 4px", borderRadius: 4, textAlign: "center", fontWeight: 700 }}>{ds.length} дост.</div>
+                  {ds.length === 1 && <div style={{ fontSize: 9, color: T.textMute, overflow: "hidden", whiteSpace: "nowrap" }}>{ds[0].userName}</div>}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {selectedDay && (
+        <div style={{ marginTop: 20, borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: T.text, marginBottom: 12 }}>Доставки за {selectedDay} {new Date(year, month).toLocaleDateString("bg-BG", { month: "long" })}</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {(delivMap[selectedDay] || []).map(d => (
+              <div key={d.id} style={{ display: "flex", justifyContent: "space-between", background: T.bg, padding: "10px 14px", borderRadius: 10 }}>
+                <div>
+                  <div style={{ fontWeight: 700, fontSize: 13, color: T.text }}>#{d.deliveryId} · {d.userName}</div>
+                  <div style={{ fontSize: 11, color: T.textSub }}>{new Date(d.date).toLocaleTimeString("bg-BG", { hour: "2-digit", minute: "2-digit" })}</div>
+                </div>
+                <button onClick={() => onPreview(d)} style={{ background: T.primary, color: "#fff", border: "none", borderRadius: 6, padding: "4px 8px", fontSize: 11, cursor: "pointer", fontWeight: 700 }}>👁</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1777,6 +1977,19 @@ export default function WarehouseApp() {
   const theme = darkMode ? DARK : LIGHT;
   useEffect(() => { try { localStorage.setItem(K.theme, darkMode ? "dark" : "light"); } catch {} }, [darkMode]);
 
+  // Default Supabase Config from user
+  useEffect(() => {
+    const current = JSON.parse(localStorage.getItem(K.settings) || "{}");
+    if (!current.supabaseUrl || !current.supabaseKey) {
+      const updated = { 
+        ...current, 
+        supabaseUrl: "https://zbeydsbzuodgscnfdpuw.supabase.co", 
+        supabaseKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InpiZXlkc2J6dW9kZ3NjbmZkcHV3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQzODE5NDcsImV4cCI6MjA4OTk1Nzk0N30.g9xhnHQHyhW1KNhVsL9s5F8qfrw3opKcTYfK7LJssMw" 
+      };
+      localStorage.setItem(K.settings, JSON.stringify(updated));
+    }
+  }, []);
+
   const [currentUser, setCurrentUser] = useState(null);
   const [products, setProducts] = useState([]);
   const [deliveries, setDeliveries] = useState([]);
@@ -1804,6 +2017,40 @@ export default function WarehouseApp() {
   const [showRecap, setShowRecap] = useState(false);
   const [confirmAction, setConfirmAction] = useState(null);
   const [mobileMenu, setMobileMenu] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [supabaseLoaded, setSupabaseLoaded] = useState(false);
+
+  useEffect(() => {
+    if (window.supabase) { setSupabaseLoaded(true); return; }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+    script.async = true;
+    script.onload = () => setSupabaseLoaded(true);
+    document.body.appendChild(script);
+  }, []);
+
+  useEffect(() => {
+    sget("onboarding-done").then(v => { if (!v) setShowOnboarding(true); });
+  }, []);
+
+  const finishOnboarding = async () => { setShowOnboarding(false); await sset("onboarding-done", true); };
+
+  const migrateToSupabase = async () => {
+    const sb = getSupabase();
+    if (!sb) return showToast("Supabase не е конфигуриран", "error");
+    showToast("Миграцията започна...", "info");
+    try {
+      const keys = Object.values(K).concat(["onboarding-done"]);
+      for (const k of keys) {
+        const v = JSON.parse(localStorage.getItem(k));
+        if (v) await sb.from("app_data").upsert({ key: k, value: v }, { onConflict: "key" });
+      }
+      showToast("Данните са качени успешно! 🎉", "success");
+      loadAll();
+    } catch (e) { showToast("Грешка при миграцията", "error"); }
+  };
+  window._migrate = migrateToSupabase;
+
 
   const [settings, setSettings] = useState({ telegramToken: "", telegramChat: "" });
   const [showSettings, setShowSettings] = useState(false);
@@ -1815,11 +2062,55 @@ export default function WarehouseApp() {
   const prevAlertKeyRef = useRef("");
   const notifRef = useRef(null);
   const recapShownRef = useRef(false);
+  const lastStateRef = useRef(null);
 
   const isMobile = useIsMobile();
   const isOwner = currentUser?.role === "owner";
   const canEdit = canDo(currentUser, "edit_products") || isOwner;
-  const showToast = useCallback((msg, type = "info") => setToast({ msg, type }), []);
+  const showToast = useCallback((msg, type = "info", undoable = false) => setToast({ msg, type, undoable }), []);
+
+  const handleUndo = async () => {
+    if (!lastStateRef.current) return;
+    const { products: p, deliveries: d, clients: c, waste: w, stocktakes: st } = lastStateRef.current;
+    if (p) { setProducts(p); await sset(K.products, p); }
+    if (d) { setDeliveries(d); await sset(K.deliveries, d); }
+    if (c) { setClients(c); await sset(K.clients, c); }
+    if (w) await sset(K.waste, w);
+    if (st) await sset(K.stocktakes, st);
+    lastStateRef.current = null;
+    setToast(null);
+    showToast("Действието бе отменено ✓", "info");
+  };
+
+  const saveState = () => { lastStateRef.current = { products: [...products], deliveries: [...deliveries] }; };
+
+  useEffect(() => {
+    const handler = (e) => {
+      const isInput = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+      if (e.altKey && e.key >= "1" && e.key <= "6") {
+        const idx = parseInt(e.key) - 1;
+        const v = [
+          {id:"dashboard"}, {id:"inventory"}, 
+          {id: currentUser?.role === "worker" ? "request" : "delivery"},
+          {id:"history"}, {id:"stats"}
+        ][idx];
+        if (v) setView(v.id);
+      }
+      if (e.ctrlKey && e.key === "f") {
+        e.preventDefault(); setView("inventory");
+        setTimeout(() => document.getElementById("search-input")?.focus(), 50);
+      }
+      if (e.key === "Escape") {
+        setShowAddModal(false); setEditProduct(null); setReceipt(null); setShowWorkers(false);
+        setAlertMode(null); setShowReport(false); setShowNotifications(false); setShowWaste(false);
+        setShowStockTake(false); setShowClients(false); setShowSuppliers(false); setShowSettings(false);
+        setConfirmAction(null);
+      }
+      if (e.ctrlKey && e.key === "z" && !isInput) { e.preventDefault(); handleUndo(); }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [setView, currentUser]);
 
   const loadAll = useCallback(async () => {
     const [p, d, c, s, t, set] = await Promise.all([sget(K.products), sget(K.deliveries), sget(K.clients), sget(K.suppliers), sget(K.templates), sget(K.settings)]);
@@ -1890,6 +2181,17 @@ export default function WarehouseApp() {
     return () => clearInterval(interval);
   }, [isOwner]);
 
+  const handleEmailDigest = () => {
+    const last7 = deliveries.filter(d => (Date.now() - new Date(d.date)) / 86400000 <= 7);
+    const byWorker = {};
+    last7.forEach(d => { if (!byWorker[d.userId]) byWorker[d.userId] = { name: d.userName, deliveries: 0, revenue: 0, profit: 0 }; byWorker[d.userId].deliveries++; d.items.forEach(i => { byWorker[d.userId].revenue += (i.price || 0) * i.qty; byWorker[d.userId].profit += ((i.price || 0) - (i.costPrice || 0)) * i.qty; }); });
+    const total = { revenue: 0, profit: 0 };
+    last7.forEach(d => d.items.forEach(i => { total.revenue += (i.price || 0) * i.qty; total.profit += ((i.price || 0) - (i.costPrice || 0)) * i.qty; }));
+    const lines = Object.values(byWorker).map(w => `${w.name}: ${w.deliveries} дост. | ${fmt(w.revenue)} лв | печ. ${fmt(w.profit)} лв`).join("\n");
+    const emailContent = `Склад PRO - Седмичен Отчет\n\nДоставки (7 дни): ${last7.length}\nПриход: ${fmt(total.revenue)} лв\nПечалба: ${fmt(total.profit)} лв\n\nПО РАБОТНИЦИ:\n${lines || "Няма данни"}\n\nАвтоматично генериран от Склад PRO.`;
+    window.open(`mailto:?subject=${encodeURIComponent("Склад PRO Седмичен Отчет")}&body=${encodeURIComponent(emailContent)}`);
+  };
+
   const saveProducts = async (updated) => { await sset(K.products, updated); setLastSync(Date.now()); };
 
   const refreshPricesWithList = async (list) => {
@@ -1911,7 +2213,13 @@ export default function WarehouseApp() {
   const deleteProduct = (id) => {
     if (!canEdit) return;
     setConfirmAction({ title: "🗑 Изтриване на продукт", message: "Сигурни ли сте, че искате да изтриете този продукт? Действието е необратимо.", danger: true,
-      onConfirm: async () => { const updated = products.filter(p => p.id !== id); setProducts(updated); await saveProducts(updated); showToast("Продуктът е изтрит ✓", "info"); setConfirmAction(null); }
+      onConfirm: async () => {
+        saveState();
+        const updated = products.filter(p => p.id !== id);
+        setProducts(updated); await saveProducts(updated);
+        showToast("Продуктът е изтрит", "info", true);
+        setConfirmAction(null);
+      }
     });
   };
 
@@ -1972,8 +2280,17 @@ export default function WarehouseApp() {
     const updatedDeliveries = [...(deliveries || []), newDelivery];
     setProducts(updated); await saveProducts(updated);
     setDeliveries(updatedDeliveries); await sset(K.deliveries, updatedDeliveries);
+
+    if (settings?.telegramToken && settings?.telegramChat && !isOffline) {
+      const toAlert = updated.filter(p => p.qty <= p.minQty && products.find(op => op.id === p.id)?.qty > p.minQty);
+      toAlert.forEach(p => {
+        const text = `⚠️ Нисък запас!\n\nПродукт: ${p.name}\nКод: ${p.code}\nОставащи: ${p.qty} ${p.unit}\nМинимум: ${p.minQty} ${p.unit}`;
+        fetch(`https://api.telegram.org/bot${settings.telegramToken}/sendMessage?chat_id=${settings.telegramChat}&text=${encodeURIComponent(text)}`).catch(()=>console.log("Telegram alert failed"));
+      });
+    }
+
     setReceipt({ ...newDelivery }); setCart([]); setCartQtys({});
-    showToast(`Доставка #${deliveryId} завършена ✓`, "success");
+    showToast(`Доставка #${deliveryId} завършена`, "success", true);
   };
 
   const handlePrint = (r) => {
@@ -2064,6 +2381,8 @@ export default function WarehouseApp() {
             {!isMobile && isOwner && (
               <>
                 <button className="btn-hover" onClick={() => setShowReport(true)} style={{ padding: "7px 14px", background: "#ECFDF5", border: "1px solid #A7F3D0", borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: "#065F46", fontWeight: 700 }}>📊 Отчет</button>
+                <button className="btn-hover" onClick={handleEmailDigest} style={{ padding: "7px 14px", background: "#EFF6FF", border: "1px solid #BFDBFE", borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: "#1D4ED8", fontWeight: 700 }}>✉️ Email</button>
+                <button className="btn-hover" onClick={() => setShowSettings(true)} style={{ padding: "7px 14px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: theme.textSub, fontWeight: 600 }}>⚙️</button>
                 <button className="btn-hover" onClick={() => setShowClients(true)} style={{ padding: "7px 14px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: theme.textSub, fontWeight: 600 }}>🤝</button>
                 <button className="btn-hover" onClick={() => setShowSuppliers(true)} style={{ padding: "7px 14px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: theme.textSub, fontWeight: 600 }}>🏭</button>
                 <button className="btn-hover" onClick={() => setShowWorkers(true)} style={{ padding: "7px 14px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: theme.textSub, fontWeight: 600 }}>👥</button>
@@ -2071,7 +2390,12 @@ export default function WarehouseApp() {
             )}
             {!isMobile && <button className="btn-hover" onClick={() => setCurrentUser(null)} style={{ padding: "7px 14px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontFamily: F, fontSize: 12, color: theme.textSub, fontWeight: 600 }}>Изход</button>}
             {isMobile && <button onClick={() => setMobileMenu(v => !v)} style={{ padding: "7px 11px", background: theme.bg, border: `1px solid ${theme.border}`, borderRadius: 10, cursor: "pointer", fontSize: 16 }}>☰</button>}
-            {!isMobile && <div style={{ fontSize: 10, color: theme.textMute, fontWeight: 500, whiteSpace: "nowrap" }}>🔄 {new Date(lastSync).toLocaleTimeString("bg-BG")}</div>}
+            {!isMobile && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10, color: theme.textMute, fontWeight: 500, whiteSpace: "nowrap" }}>
+                {isOffline ? <span style={{ color: theme.red, fontWeight: 700 }}>🔴 Офлайн</span> : <span style={{ color: theme.green }}>🟢 Онлайн</span>}
+                <div>🔄 {new Date(lastSync).toLocaleTimeString("bg-BG")}</div>
+              </div>
+            )}
           </div>
         </header>
         {isMobile && mobileMenu && (
@@ -2108,13 +2432,20 @@ export default function WarehouseApp() {
       {showWaste && isOwner && <WasteModal products={products} onSave={handleWaste} onClose={() => setShowWaste(false)} />}
       {showCompare && isOwner && <CompareModal products={products} onClose={() => setShowCompare(false)} />}
       {showStockTake && isOwner && <StockTakeModal products={products} onSave={handleStockTake} onClose={() => setShowStockTake(false)} />}
+      {showSettings && isOwner && <SettingsModal settings={settings} onSave={async s => { setSettings(s); await sset(K.settings, s); setShowSettings(false); showToast("Настройките са запазени ✓", "success"); }} onClose={() => setShowSettings(false)} />}
       {showClients && isOwner && <ContactBrowserModal type="client" contacts={clients} onSave={async c => { const up = clients.find(x=>x.id===c.id) ? clients.map(x=>x.id===c.id?c:x) : [...clients, c]; setClients(up); await sset(K.clients, up); }} onDelete={async id => { const up = clients.filter(x=>x.id!==id); setClients(up); await sset(K.clients, up); }} onClose={() => setShowClients(false)} />}
       {showSuppliers && isOwner && <ContactBrowserModal type="supplier" contacts={suppliers} onSave={async s => { const up = suppliers.find(x=>x.id===s.id) ? suppliers.map(x=>x.id===s.id?s:x) : [...suppliers, s]; setSuppliers(up); await sset(K.suppliers, up); }} onDelete={async id => { const up = suppliers.filter(x=>x.id!==id); setSuppliers(up); await sset(K.suppliers, up); }} onClose={() => setShowSuppliers(false)} />}
       {showWorkers && isOwner && <ManageWorkersModal onClose={() => setShowWorkers(false)} />}
       {showReport && isOwner && <DailyReportModal deliveries={deliveries} onClose={() => setShowReport(false)} onPrint={handlePrintReport} />}
       {showRecap && <LoginRecapModal currentUser={currentUser} deliveries={deliveries} products={products} onClose={() => setShowRecap(false)} />}
       {confirmAction && <ConfirmModal title={confirmAction.title} message={confirmAction.message} danger={confirmAction.danger} onConfirm={confirmAction.onConfirm} onCancel={() => setConfirmAction(null)} />}
-      {toast && <Toast msg={toast.msg} type={toast.type} onClose={() => setToast(null)} />}
+      {toast && <Toast msg={toast.msg} type={toast.type} undoable={toast.undoable} onUndo={handleUndo} onClose={() => setToast(null)} />}
+      {isMobile && !showAddModal && !editProduct && !receipt && <QuickActionsFAB onAction={a => {
+        if (a === "add") setShowAddModal(true);
+        if (a === "delivery") setView("delivery");
+        if (a === "search") { setView("inventory"); setTimeout(() => document.getElementById("search-input")?.focus(), 100); }
+      }} />}
+      {showOnboarding && <OnboardingModal onClose={finishOnboarding} />}
     </ThemeCtx.Provider>
   );
 }
